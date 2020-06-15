@@ -5,6 +5,7 @@ from gevent.queue import Queue
 import requests
 from bs4 import BeautifulSoup
 import json
+import base64
 from selenium import webdriver
 from selenium.webdriver.common.desired_capabilities import DesiredCapabilities
 from selenium.webdriver.common.by import By
@@ -20,16 +21,17 @@ class MySignals(QObject):
     text_print = Signal(QTextBrowser, str)
     progress_update = Signal(int)
 
-class Pixiv():
+class Pixiv(MySignals):
 
     def __init__(self):
+        super(Pixiv, self).__init__()
         self.ui = QUiLoader().load('main.ui')
         #可批量下载，如:111111,222222(逗号用英文)
         self.ui.lineEdit_illustID.setPlaceholderText('可批量下载，如:111111,222222(逗号用英文)')
-        # self.ui.pushButton.clicked.connect(self.get_paint)
+        self.ui.pushButton_Login.clicked.connect(self.Login)
         # self.ui.pushButton_2.clicked.connect(self.get_path)
-        MS.progress_update.connect(self.setProgress)
-        MS.text_print.connect(self.printPace)
+        self.progress_update.connect(self.setProgress)
+        self.text_print.connect(self.printPace)
 
     def get_path(self):
         path = QFileDialog.getExistingDirectory(self.ui, "选择存储路径")
@@ -41,6 +43,10 @@ class Pixiv():
     def printPace(self, element, text):
         element.append(str(text))
         element.ensureCursorVisible()
+
+    def Login(self):
+        print(self.ui.lineEdit_usrID.text(), self.ui.lineEdit_password.text())
+        PL.Put_login_cookies(self.ui.lineEdit_usrID.text(), self.ui.lineEdit_password.text())
 
     def get_paint(self):
         def State():
@@ -63,26 +69,64 @@ class Pixiv():
             QMessageBox.critical(self.ui, '错误', '爬取失败，连接超时！！！')
 
 
-class Pixiv_Login(Pixiv):
+class Pixiv_Login():
     def __init__(self):
-        super(Pixiv_Login, self).__init__()
         self.session = requests.session()
-        try:
-            self.Get_login_info()
-            self.Get_login_cookies()
-        except FileNotFoundError:
-            QMessageBox.warning(PP.ui, '警告', '请重新登录！！！')
+        info_dict = self.Get_login_info()
+        PP.ui.lineEdit_usrID.setText(info_dict['usrID'])
+        PP.ui.lineEdit_password.setText(base64.b64decode(info_dict['password'].encode('utf-8')).decode('utf-8'))
+        # self.session.cookies = self.Get_login_cookies()
+        # url = 'https://www.pixiv.net/setting_user.php'
+        # login_code = self.session.get(url, allow_redirects=False)
+        # print(login_code.status_code)
+        # if login_code.status_code != 200:
+        #     QMessageBox.warning(PP.ui, '警告', 'cookie已过期，请重新登录!！！')
 
     def Get_login_cookies(self):
-        self.jar = RequestsCookieJar()
+        jar = RequestsCookieJar()
         with open('cookie.json', 'r') as cookie_txt:
             cookies_list = json.loads(cookie_txt.read())
             for cookie in cookies_list:
-                self.jar.set(cookie['name'], cookie['value'])
+                jar.set(cookie['name'], cookie['value'])
+        return jar
 
     def Get_login_info(self):
         with open('info.json', 'r') as info:
-            self.info_dict = json.loads(info.read())
+            info_dict = json.loads(info.read())
+        return info_dict
+
+    def Put_login_cookies(self, usrID, password):
+        option = webdriver.ChromeOptions()
+        option.add_argument('headless')  # 静默模式
+        capa = DesiredCapabilities.CHROME
+        capa["pageLoadStrategy"] = "none"
+        driver = webdriver.Chrome(desired_capabilities=capa, chrome_options=option)
+        driver.get(
+            'https://accounts.pixiv.net/login?return_to=https%3A%2F%2Fwww.pixiv.net%2F&lang=zh&source=pc&view_type=page')
+        # time.sleep(5)
+        wait = WebDriverWait(driver, 40)
+        wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="LoginComponent"]')))
+        driver.execute_script("window.stop();")
+        driver.find_element_by_xpath('//*[@id="LoginComponent"]/form/div[1]/div[1]/input').send_keys(usrID)
+        time.sleep(1)
+        driver.find_element_by_xpath('//*[@id="LoginComponent"]/form/div[1]/div[2]/input').send_keys(password)
+        time.sleep(5)
+        driver.find_element_by_xpath('//*[@id="LoginComponent"]/form/button').click()
+        wait = WebDriverWait(driver, 60)
+        wait.until(EC.presence_of_element_located((By.ID, 'qualaroo_dnt_frame')))
+        # time.sleep(60)
+        cookies_list = driver.get_cookies()
+        # print(cookies_list)
+        cookies_json = json.dumps(cookies_list)
+        with open('cookie.json', 'w') as flie:
+            flie.write(cookies_json)
+        info_dict = {}
+        info_dict['usrID'] = usrID
+        info_dict['password'] = base64.b64encode(password.encode('utf-8')).decode('utf-8')
+        with open('info.json', 'w') as info:
+            info.write(json.dumps(info_dict))
+        driver.close()
+        QMessageBox.about(PP.ui, '通知', '登录成功!')
 
 class Illust_download(Pixiv_Login):
     def __init__(self):
@@ -142,8 +186,8 @@ class Illust_download(Pixiv_Login):
                       'wb') as photo:
                 photo.write(res_photo.content)
             self.work_2_num = self.work_2_num + 1
-            MS.text_print.emit(PP.ui.textBrowser, '第{}幅作品……下载成功'.format(self.work_2_num))
-            MS.progress_update.emit(self.work_2_num)
+            PP.text_print.emit(PP.ui.textBrowser, '第{}幅作品……下载成功'.format(self.work_2_num))
+            PP.progress_update.emit(self.work_2_num)
 
     def run_download(self, path):
         for reptile in range(5):
@@ -161,9 +205,10 @@ class Illust_download(Pixiv_Login):
         # thread.setDaemon(True)
         thread.start()
 
-MS = MySignals()
-PD = Illust_download()
 app = QApplication([])
 PP = Pixiv()
+# MS = MySignals()
+PL = Pixiv_Login()
+PD = Illust_download()
 PP.ui.show()
 app.exec_()
