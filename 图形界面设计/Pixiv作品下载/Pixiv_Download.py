@@ -4,6 +4,7 @@ import gevent
 from gevent.queue import Queue
 import requests
 from bs4 import BeautifulSoup
+import os
 import json
 import base64
 from selenium import webdriver
@@ -21,21 +22,23 @@ class MySignals(QObject):
     text_print = Signal(QTextBrowser, str)
     progress_update = Signal(int)
 
-class Pixiv(MySignals):
+class Pixiv():
 
     def __init__(self):
-        super(Pixiv, self).__init__()
         self.ui = QUiLoader().load('main.ui')
         #可批量下载，如:111111,222222(逗号用英文)
         self.ui.lineEdit_illustID.setPlaceholderText('可批量下载，如:111111,222222(逗号用英文)')
         self.ui.pushButton_Login.clicked.connect(self.Login)
-        # self.ui.pushButton_2.clicked.connect(self.get_path)
-        self.progress_update.connect(self.setProgress)
-        self.text_print.connect(self.printPace)
+        self.ui.pushButton_path.clicked.connect(self.get_path)
+        self.ui.pushButton_illustID.clicked.connect(self.get_illust)
+        self.ui.pushButton_authorID.clicked.connect(self.get_authorIllust)
+        self.ui.pushButton_censorPicture.clicked.connect(self.censorPicture)
+        MS.progress_update.connect(self.setProgress)
+        MS.text_print.connect(self.printPace)
 
     def get_path(self):
         path = QFileDialog.getExistingDirectory(self.ui, "选择存储路径")
-        self.ui.lineEdit_2.setText(path)
+        self.ui.lineEdit_path.setText(path)
 
     def setProgress(self, value):
         self.ui.progressBar.setValue(value)
@@ -45,42 +48,116 @@ class Pixiv(MySignals):
         element.ensureCursorVisible()
 
     def Login(self):
-        print(self.ui.lineEdit_usrID.text(), self.ui.lineEdit_password.text())
-        PL.Put_login_cookies(self.ui.lineEdit_usrID.text(), self.ui.lineEdit_password.text())
+        PL.Login_thread(self.ui.lineEdit_userID.text(), self.ui.lineEdit_password.text())
 
-    def get_paint(self):
+    def censorPicture(self):
+        if self.ui.lineEdit_path.text() == '':
+            QMessageBox.warning(self.ui, '警告', '路径不能为空！！！')
+        elif self.ui.lineEdit_path.text() != '':
+            PC = Check_picture(self.ui.lineEdit_path.text())
+            PC.thread_FilterPic()
+
+    def get_illust(self):
         def State():
             state = True
-            if self.ui.lineEdit.text() == '' or self.ui.lineEdit_2.text() == '':
+            if self.ui.lineEdit_illustID.text() == '' or self.ui.lineEdit_path.text() == '':
                 QMessageBox.warning(self.ui, '警告', 'ID与路径不能为空！！！')
                 state = False
             return state
 
-        def paint_thread():
+        def illust_thread():
             self.ui.textBrowser.setPlainText('======开始爬取======')
-            PD.painting_id(self.ui.lineEdit.text())
-            PD.Downloading(self.ui.lineEdit_2.text())
+            PD.illustID(self.ui.lineEdit_illustID.text())
+            PD.illust_download(self.ui.lineEdit_path.text())
         # if State():
-        #     paint_thread()
+        #     illust_thread()
         try:
             if State():
-                paint_thread()
+                illust_thread()
         except:
             QMessageBox.critical(self.ui, '错误', '爬取失败，连接超时！！！')
 
+    def get_authorIllust(self):
+        def State():
+            state = True
+            if self.ui.lineEdit_authorID.text() == '' or self.ui.lineEdit_path.text() == '':
+                QMessageBox.warning(self.ui, '警告', 'ID与路径不能为空！！！')
+                state = False
+            return state
+
+        def illust_thread():
+            self.ui.textBrowser.setPlainText('======开始爬取======')
+            PD.Author_iIllust(self.ui.lineEdit_authorID.text(), self.ui.lineEdit_path.text())
+
+        # if State():
+        #     illust_thread()
+        try:
+            if State():
+                illust_thread()
+        except:
+            QMessageBox.critical(self.ui, '错误', '爬取失败，连接超时！！！')
+
+class Check_picture():
+    def __init__(self, path):
+        MS.text_print.emit(PP.ui.textBrowser, '正在检测图片是否有缺损……')
+        self.path = path
+        self.flie_path = path+'\\'
+        self.img_names = []
+        self.corrupt_num = 0
+
+    def filter_picture(self):
+        img_path = os.listdir(self.flie_path)
+        for img_name in img_path:
+            # print(img_name)
+            flie_suffix = os.path.splitext(img_name)[1].lower()
+            if flie_suffix == '.jpg':
+                flie = open(self.flie_path+img_name, 'rb')
+                flie.seek(-2, 2)
+                flie_data = flie.read()
+                flie.close()
+                if not flie_data.endswith(b'\xff\xd9'):
+                    img_id = os.path.splitext(img_name)[0].lower().split('_')[6]
+                    self.img_names.append(img_id)
+                    self.corrupt_num += 1
+                    self.delete_picture(img_name)
+
+            elif flie_suffix == '.png':
+                flie = open(self.flie_path+img_name, 'rb')
+                flie.seek(-4, 2)
+                flie_data = flie.read()
+                flie.close()
+                if not flie_data.endswith(b'\xaeB`\x82'):
+                    img_id = os.path.splitext(img_name)[0].lower().split('_')[6]
+                    self.img_names.append(img_id)
+                    self.corrupt_num += 1
+                    self.delete_picture(img_name)
+        # print('缺损图片 : %d张' % self.corrupt_num)
+        MS.text_print.emit(PP.ui.textBrowser, '缺损图片 : %d张' % self.corrupt_num)
+        # print(self.img_names)
+        if self.corrupt_num != 0:
+            MS.text_print.emit(PP.ui.textBrowser, '======重新开始爬取======')
+            PD.illustID(self.img_names)
+            PD.illust_download(self.path)
+
+    def delete_picture(self, img_name):
+        os.remove(self.flie_path + img_name)
+
+    def thread_FilterPic(self):
+        thread_filterPic = Thread(target=self.filter_picture)
+        thread_filterPic.start()
+
+    def storage_id(self):
+        with open('id.json', 'w') as data:
+            data.write(json.dumps(self.img_names))
 
 class Pixiv_Login():
     def __init__(self):
         self.session = requests.session()
         info_dict = self.Get_login_info()
-        PP.ui.lineEdit_usrID.setText(info_dict['usrID'])
+        PP.ui.label_userName.setText(info_dict['userName'])
+        PP.ui.lineEdit_userID.setText(info_dict['userID'])
         PP.ui.lineEdit_password.setText(base64.b64decode(info_dict['password'].encode('utf-8')).decode('utf-8'))
-        # self.session.cookies = self.Get_login_cookies()
-        # url = 'https://www.pixiv.net/setting_user.php'
-        # login_code = self.session.get(url, allow_redirects=False)
-        # print(login_code.status_code)
-        # if login_code.status_code != 200:
-        #     QMessageBox.warning(PP.ui, '警告', 'cookie已过期，请重新登录!！！')
+        self.session.cookies = self.Get_login_cookies()
 
     def Get_login_cookies(self):
         jar = RequestsCookieJar()
@@ -95,7 +172,23 @@ class Pixiv_Login():
             info_dict = json.loads(info.read())
         return info_dict
 
-    def Put_login_cookies(self, usrID, password):
+    def Censor_cookies(self):
+        url = 'https://www.pixiv.net/setting_user.php'
+        login_code = self.session.get(url, allow_redirects=False)
+        # print(login_code.status_code)
+        if login_code.status_code != 200:
+            MS.text_print.emit(PP.ui.textBrowser, '警告!……cookie已过期，请重新登录!！！')
+
+    # def Censor_login(self):
+    #     cookies = self.Get_login_cookies()
+    #     url = 'https://www.pixiv.net/setting_user.php'
+    #     login_code = requests.get(url, cookies=cookies, allow_redirects=False)
+    #     # print(login_code.status_code)
+    #     if login_code.status_code != 200:
+    #         MS.text_print.emit(PP.ui.textBrowser, '……登录失败!!!')
+
+    def Put_login_cookies(self, userID, password):
+        MS.text_print.emit(PP.ui.textBrowser, '登录中loading……')
         option = webdriver.ChromeOptions()
         option.add_argument('headless')  # 静默模式
         capa = DesiredCapabilities.CHROME
@@ -107,7 +200,7 @@ class Pixiv_Login():
         wait = WebDriverWait(driver, 40)
         wait.until(EC.presence_of_element_located((By.XPATH, '//*[@id="LoginComponent"]')))
         driver.execute_script("window.stop();")
-        driver.find_element_by_xpath('//*[@id="LoginComponent"]/form/div[1]/div[1]/input').send_keys(usrID)
+        driver.find_element_by_xpath('//*[@id="LoginComponent"]/form/div[1]/div[1]/input').send_keys(userID)
         time.sleep(1)
         driver.find_element_by_xpath('//*[@id="LoginComponent"]/form/div[1]/div[2]/input').send_keys(password)
         time.sleep(5)
@@ -120,13 +213,29 @@ class Pixiv_Login():
         cookies_json = json.dumps(cookies_list)
         with open('cookie.json', 'w') as flie:
             flie.write(cookies_json)
-        info_dict = {}
-        info_dict['usrID'] = usrID
-        info_dict['password'] = base64.b64encode(password.encode('utf-8')).decode('utf-8')
-        with open('info.json', 'w') as info:
-            info.write(json.dumps(info_dict))
         driver.close()
-        QMessageBox.about(PP.ui, '通知', '登录成功!')
+        info_dict = {}
+        cookies = self.Get_login_cookies()
+        url = 'https://www.pixiv.net/setting_user.php'
+        login_code = requests.get(url, cookies=cookies, allow_redirects=False)
+        # print(login_code.status_code)
+        if login_code.status_code == 200:
+            html_login = login_code.text
+            soup_login = BeautifulSoup(html_login, 'html.parser')
+            json_content = soup_login.find(id='meta-global-data')['content']
+            userName = json.loads(json_content)['userData']['name']
+            info_dict['userName'] = userName
+            info_dict['userID'] = userID
+            info_dict['password'] = base64.b64encode(password.encode('utf-8')).decode('utf-8')
+            with open('info.json', 'w') as info:
+                info.write(json.dumps(info_dict))
+            MS.text_print.emit(PP.ui.textBrowser, '……登录成功!')
+
+    def Login_thread(self, userID, password):
+        def Lodin_work(userID, password):
+            self.Put_login_cookies(userID, password)
+        thread_Login = Thread(target=Lodin_work, args=(userID, password, ))
+        thread_Login.start()
 
 class Illust_download(Pixiv_Login):
     def __init__(self):
@@ -138,13 +247,18 @@ class Illust_download(Pixiv_Login):
         self.tasks_list_2 = []
         self.work_2_num = 0
 
-    def painting_id(self, ides):
-        ides = ides.replace('，', ',')
-        id_list = ides.split(',')
+    def illustID(self, ides):
+        id_list = []
+        if type(ides) == str:
+            ides = ides.replace('，', ',')
+            id_list = ides.split(',')
+        elif type(ides) == list:
+            id_list = ides
         for id in id_list:
+            # print(id)
             self.work_1.put_nowait(id)
 
-    def painting_XHR(self):
+    def illust_info(self):
         while not self.work_1.empty():
             id_photo = self.work_1.get_nowait()
             url_works = 'https://www.pixiv.net/ajax/illust/{}/pages?lang=zh'.format(id_photo)
@@ -159,9 +273,9 @@ class Illust_download(Pixiv_Login):
                 url_original = body_works['urls']['original']
                 self.list_photo.append([url_original, id_photo])
 
-    def run_painting(self):
+    def get_illust(self):
         for reptile in range(10):
-            task_1 = gevent.spawn(self.painting_XHR)
+            task_1 = gevent.spawn(self.illust_info)
             self.tasks_list_1.append(task_1)
         gevent.joinall(self.tasks_list_1)
 
@@ -186,8 +300,8 @@ class Illust_download(Pixiv_Login):
                       'wb') as photo:
                 photo.write(res_photo.content)
             self.work_2_num = self.work_2_num + 1
-            PP.text_print.emit(PP.ui.textBrowser, '第{}幅作品……下载成功'.format(self.work_2_num))
-            PP.progress_update.emit(self.work_2_num)
+            MS.text_print.emit(PP.ui.textBrowser, '第{}幅作品……下载成功'.format(self.work_2_num))
+            MS.progress_update.emit(self.work_2_num)
 
     def run_download(self, path):
         for reptile in range(5):
@@ -195,19 +309,62 @@ class Illust_download(Pixiv_Login):
             self.tasks_list_2.append(task_2)
         gevent.joinall(self.tasks_list_2)
 
-    def Downloading(self, path):
-        def thread_download(path):
-            self.run_painting()
+    def illust_download(self, path):
+        def thread_illust_download(path):
+            self.Censor_cookies()
+            self.get_illust()
             self.urls()
             self.run_download(path)
-
-        thread = Thread(target=thread_download, args=(path,))
-        # thread.setDaemon(True)
+        thread = Thread(target=thread_illust_download, args=(path,))
+        thread.setDaemon(True)
         thread.start()
 
+    def author_illust(self, authorID):
+        illust_list = []
+        id_author = authorID
+        url_authorHome = 'https://www.pixiv.net/users/{}'.format(id_author)
+        ulr_author = 'https://www.pixiv.net/ajax/user/{}/profile/all?lang=zh'.format(id_author)
+        # headers_authorHome = {
+        #     'referer': 'https://www.pixiv.net/users/{}/following'.format(id_author),
+        #     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36'
+        # }
+        headers_author = {
+            'referer': 'https://www.pixiv.net/users/{}'.format(id_author),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36'
+        }
+        res_authorHome = self.session.get(url_authorHome, headers=headers_author)
+        res_author = self.session.get(ulr_author, headers=headers_author)
+        print(res_authorHome.status_code, res_author.status_code)
+        json_author = res_author.json()
+        illusts = json_author['body']['illusts']
+        soup_authorHome = BeautifulSoup(res_authorHome.text, 'html.parser')
+        json_content = soup_authorHome.find(id='meta-preload-data')['content']
+        self.userName = json.loads(json_content)['user'][id_author]['name']
+        illust_num = len(illusts)
+        MS.text_print.emit(PP.ui.textBrowser, '画师{0}共有{1}幅作品'.format(self.userName, illust_num))
+        # print('画师{0}共有{1}幅作品'.format(userName, illust_num))
+        for illust in illusts:
+            illust_list.append(illust)
+        PD.illustID(illust_list)
+
+
+    def Author_iIllust(self, authorID, path):
+        def work_Author_iIllust(authorID, path):
+            self.Censor_cookies()
+            self.author_illust(authorID)
+            self.get_illust()
+            self.urls()
+            path = path + '\\' + self.userName
+            os.mkdir(path)
+            self.run_download(path)
+        thread__Author_iIllust = Thread(target=work_Author_iIllust, args=(authorID, path,))
+        thread__Author_iIllust.setDaemon(True)
+        thread__Author_iIllust.start()
+
+
 app = QApplication([])
+MS = MySignals()
 PP = Pixiv()
-# MS = MySignals()
 PL = Pixiv_Login()
 PD = Illust_download()
 PP.ui.show()
