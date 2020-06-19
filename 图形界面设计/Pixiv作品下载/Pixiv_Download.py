@@ -32,6 +32,7 @@ class Pixiv():
         self.ui.pushButton_path.clicked.connect(self.get_path)
         self.ui.pushButton_illustID.clicked.connect(self.get_illust)
         self.ui.pushButton_authorID.clicked.connect(self.get_authorIllust)
+        self.ui.pushButton_collect.clicked.connect(self.get_collectIllust)
         self.ui.pushButton_censorPicture.clicked.connect(self.censorPicture)
         MS.progress_update.connect(self.setProgress)
         MS.text_print.connect(self.printPace)
@@ -65,7 +66,7 @@ class Pixiv():
                 state = False
             return state
 
-        def illust_thread():
+        def illust():
             self.ui.textBrowser.setPlainText('======开始爬取======')
             PD.illustID(self.ui.lineEdit_illustID.text())
             PD.illust_download(self.ui.lineEdit_path.text())
@@ -73,7 +74,7 @@ class Pixiv():
         #     illust_thread()
         try:
             if State():
-                illust_thread()
+                illust()
         except:
             QMessageBox.critical(self.ui, '错误', '爬取失败，连接超时！！！')
 
@@ -88,7 +89,6 @@ class Pixiv():
         def illust_thread():
             self.ui.textBrowser.setPlainText('======开始爬取======')
             PD.Author_iIllust(self.ui.lineEdit_authorID.text(), self.ui.lineEdit_path.text())
-
         # if State():
         #     illust_thread()
         try:
@@ -97,9 +97,28 @@ class Pixiv():
         except:
             QMessageBox.critical(self.ui, '错误', '爬取失败，连接超时！！！')
 
+    def get_collectIllust(self):
+        def State():
+            state = True
+            if self.ui.spinBox_page.value() == 0 or self.ui.lineEdit_path.text() == '':
+                QMessageBox.warning(self.ui, '警告', '目标页数不能为0且路径不能为空！！！')
+                state = False
+            return state
+
+        def collectIllust():
+            self.ui.textBrowser.setPlainText('======开始爬取======')
+            PD.Collect_page(self.ui.spinBox_page.value())
+            PD.Collect_iIllust(self.ui.lineEdit_path.text())
+        try:
+            if State():
+                collectIllust()
+        except:
+            QMessageBox.critical(self.ui, '错误', '爬取失败，连接超时！！！')
+
 class Check_picture():
     def __init__(self, path):
-        MS.text_print.emit(PP.ui.textBrowser, '正在检测图片是否有缺损……')
+        PP.ui.textBrowser.setPlainText('正在检测图片是否有缺损……')
+        # MS.text_print.emit(PP.ui.textBrowser, '正在检测图片是否有缺损……')
         self.path = path
         self.flie_path = path+'\\'
         self.img_names = []
@@ -144,6 +163,7 @@ class Check_picture():
 
     def thread_FilterPic(self):
         thread_filterPic = Thread(target=self.filter_picture)
+        thread_filterPic.setDaemon(True)
         thread_filterPic.start()
 
     def storage_id(self):
@@ -238,17 +258,18 @@ class Pixiv_Login():
         thread_Login.start()
 
 class Illust_download(Pixiv_Login):
-    def __init__(self):
-        super(Illust_download, self).__init__()
-        self.work_1 = Queue()
-        self.list_photo = []
-        self.tasks_list_1 = []
-        self.work_2 = Queue()
-        self.tasks_list_2 = []
-        self.work_2_num = 0
+    # def __init__(self):
+    #     super(Illust_download, self).__init__()
+    #     self.work_1 = Queue()
+    #     self.list_photo = []
+    #     self.tasks_list_1 = []
+    #     self.work_2 = Queue()
+    #     self.tasks_list_2 = []
+    #     self.work_2_num = 0
 
     def illustID(self, ides):
         id_list = []
+        self.work_1 = Queue()
         if type(ides) == str:
             ides = ides.replace('，', ',')
             id_list = ides.split(',')
@@ -259,6 +280,7 @@ class Illust_download(Pixiv_Login):
             self.work_1.put_nowait(id)
 
     def illust_info(self):
+        self.list_photo = []
         while not self.work_1.empty():
             id_photo = self.work_1.get_nowait()
             url_works = 'https://www.pixiv.net/ajax/illust/{}/pages?lang=zh'.format(id_photo)
@@ -274,12 +296,14 @@ class Illust_download(Pixiv_Login):
                 self.list_photo.append([url_original, id_photo])
 
     def get_illust(self):
+        self.tasks_list_1 = []
         for reptile in range(10):
             task_1 = gevent.spawn(self.illust_info)
             self.tasks_list_1.append(task_1)
         gevent.joinall(self.tasks_list_1)
 
     def urls(self):
+        self.work_2 = Queue()
         for urls_photo in self.list_photo:
             self.work_2.put_nowait(urls_photo)
         self.work_2_nums = self.work_2.qsize()
@@ -300,10 +324,13 @@ class Illust_download(Pixiv_Login):
                       'wb') as photo:
                 photo.write(res_photo.content)
             self.work_2_num = self.work_2_num + 1
-            MS.text_print.emit(PP.ui.textBrowser, '第{}幅作品……下载成功'.format(self.work_2_num))
+            MS.text_print.emit(PP.ui.textBrowser, '第{}张插画……下载成功'.format(self.work_2_num))
             MS.progress_update.emit(self.work_2_num)
 
     def run_download(self, path):
+        self.tasks_list_2 = []
+        self.work_2_num = 0
+        MS.progress_update.emit(self.work_2_num)
         for reptile in range(5):
             task_2 = gevent.spawn(self.download, path)
             self.tasks_list_2.append(task_2)
@@ -311,12 +338,13 @@ class Illust_download(Pixiv_Login):
 
     def illust_download(self, path):
         def thread_illust_download(path):
+            self.__init__()
             self.Censor_cookies()
             self.get_illust()
             self.urls()
             self.run_download(path)
         thread = Thread(target=thread_illust_download, args=(path,))
-        thread.setDaemon(True)
+        # thread.setDaemon(True)
         thread.start()
 
     def author_illust(self, authorID):
@@ -350,6 +378,7 @@ class Illust_download(Pixiv_Login):
 
     def Author_iIllust(self, authorID, path):
         def work_Author_iIllust(authorID, path):
+            self.__init__()
             self.Censor_cookies()
             self.author_illust(authorID)
             self.get_illust()
@@ -357,10 +386,48 @@ class Illust_download(Pixiv_Login):
             path = path + '\\' + self.userName
             os.mkdir(path)
             self.run_download(path)
-        thread__Author_iIllust = Thread(target=work_Author_iIllust, args=(authorID, path,))
-        thread__Author_iIllust.setDaemon(True)
-        thread__Author_iIllust.start()
+        thread_Author_iIllust = Thread(target=work_Author_iIllust, args=(authorID, path,))
+        # thread_Author_iIllust.setDaemon(True)
+        thread_Author_iIllust.start()
 
+    def Collect_page(self, page_num):
+        self.work_3 = Queue()
+        self.list_id_photo = []
+        page = page_num
+        for i in range(1, page + 1):
+            self.work_3.put_nowait(str(i))
+
+    def Collection(self):
+        while not self.work_3.empty():
+            page = self.work_3.get_nowait()
+            url_collection = "https://www.pixiv.net/bookmark.php?rest=show&p={}".format(page)
+            headers = {
+                'referer': 'https://accounts.pixiv.net/login',
+                'origin': 'https://accounts.pixiv.net',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36'
+            }
+            res_collection = self.session.get(url_collection, headers=headers)
+            print(res_collection.status_code)
+            html_collection = res_collection.text
+            soup_collection = BeautifulSoup(html_collection, 'html.parser')
+            list_collection = soup_collection.find_all(class_='image-item')
+            # print(list_collection)
+            for collection in list_collection:
+                id_collection = collection.find(class_='ui-scroll-view')
+                id_photo = id_collection['data-id']
+                self.list_id_photo.append(id_photo)
+
+    def Collect_iIllust(self, path):
+        def work_Collect_iIllust(path):
+            self.__init__()
+            self.Censor_cookies()
+            self.Collection()
+            self.illustID(self.list_id_photo)
+            self.get_illust()
+            self.urls()
+            self.run_download(path)
+        thread_Collect_iIllust = Thread(target=work_Collect_iIllust, args=(path,))
+        thread_Collect_iIllust.start()
 
 app = QApplication([])
 MS = MySignals()
